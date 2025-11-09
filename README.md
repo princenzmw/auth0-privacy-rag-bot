@@ -64,7 +64,7 @@ python app.py
 ## Deploy to Render
 Click the button or create a Web Service from this repo. Render uses `render.yaml`.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/princenzmw/mlh-flask-api-starter)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/princenzmw/mlh-api-week-flask-template)
 
 ## Run on Replit
 Import this repo → set run to `python app.py` (or use default detection).
