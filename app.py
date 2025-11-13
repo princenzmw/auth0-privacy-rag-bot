@@ -5,8 +5,11 @@ from authlib.integrations.flask_client import OAuth
 from flask import Flask, redirect, session, url_for, request, jsonify
 
 # --- This is the CORRECT FGA SDK ---
-from openfga_sdk import OpenFgaClient
-from openfga_sdk.credentials import ClientCredentials  # <-- FIX 1: ADD THIS IMPORT
+from openfga_sdk import OpenFgaClient, ClientConfiguration
+from openfga_sdk.credentials import (
+    Credentials,
+    CredentialConfiguration,
+)  # <-- FIX 1: CORRECT IMPORTS
 
 # Import models safely
 try:
@@ -22,7 +25,6 @@ except Exception as _e:
 # --- 1. INITIAL SETUP & CONFIG ---
 
 load_dotenv()
-# --- REMOVED DEBUG PRINTS ---
 app = Flask(__name__)
 app.secret_key = os.environ.get("APP_SECRET_KEY") or os.urandom(24)
 
@@ -68,21 +70,27 @@ try:
     fga_store_id = os.environ.get("FGA_STORE_ID")
 
     if fga_client_id and fga_client_secret and fga_store_id:
-        # --- FIX 2: THIS BLOCK IS REPLACED ---
-        # 1. Create the credentials object first
-        creds = ClientCredentials(
+        # --- FIX 2: THIS BLOCK IS REBUILT BASED ON DOCS ---
+        # 1. Create the credentials configuration
+        creds_config = CredentialConfiguration(
+            api_issuer=f"https://{auth0_domain}",
+            api_audience="https://api.fga.auth0.com/",
             client_id=fga_client_id,
             client_secret=fga_client_secret,
-            api_token_issuer=f"https://{auth0_domain}",
-            api_audience="https://api.fga.auth0.com/",
         )
 
-        # 2. Pass the single 'credentials' object
-        fga_client = OpenFgaClient(
-            credentials=creds,
+        # 2. Create the credentials object
+        creds = Credentials(method="client_credentials", configuration=creds_config)
+
+        # 3. Create the main client configuration
+        client_config = ClientConfiguration(
             api_url=f"https://api.{region}.fga.auth0.com",
             store_id=fga_store_id,
+            credentials=creds,
         )
+
+        # 4. Initialize the client with the single config object
+        fga_client = OpenFgaClient(client_config)
         # --- END OF FIX ---
 
         print("Official OpenFGA SDK Client Initialized.")
