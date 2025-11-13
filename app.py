@@ -21,6 +21,13 @@ except Exception as _e:
 # --- 1. INITIAL SETUP & CONFIG ---
 
 load_dotenv()
+
+print("--- DEBUGGING FGA ENV VARS ---")
+print(f"FGA_CLIENT_ID is set: {bool(os.environ.get('FGA_CLIENT_ID'))}")
+print(f"FGA_CLIENT_SECRET is set: {bool(os.environ.get('FGA_CLIENT_SECRET'))}")
+print(f"FGA_STORE_ID is set: {bool(os.environ.get('FGA_STORE_ID'))}")
+print("---------------------------------")
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("APP_SECRET_KEY") or os.urandom(24)
 
