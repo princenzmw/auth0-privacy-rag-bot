@@ -6,7 +6,17 @@ from flask import Flask, redirect, session, url_for, request, jsonify
 
 # --- This is the CORRECT FGA SDK ---
 from openfga_sdk import OpenFgaClient
-from openfga_sdk.client.models import ClientWriteRequest, ClientCheckRequest, TupleKey
+
+# Import models safely — some SDK versions may expose different symbols
+try:
+    from openfga_sdk.client.models import ClientWriteRequest, ClientCheckRequest
+
+    _HAS_OPENFGA_MODELS = True
+except Exception as _e:
+    ClientWriteRequest = None
+    ClientCheckRequest = None
+    _HAS_OPENFGA_MODELS = False
+    print(f"Warning: openfga client models not available: {_e}")
 
 # --- 1. INITIAL SETUP & CONFIG ---
 
@@ -80,25 +90,41 @@ def setup_fga_rules():
     if not fga_client:
         print("Skipping FGA rules setup: fga_client not configured")
         return
+    if not _HAS_OPENFGA_MODELS or not ClientWriteRequest:
+        print(
+            "Skipping FGA rules setup: OpenFGA model classes not available in this SDK version"
+        )
+        return
 
     print("Setting up FGA rules (Tuples)...")
 
+    # Some SDK versions don't export TupleKey; use plain dicts instead
     tuples_to_write = [
-        TupleKey(
-            user="user:alice@example.com", relation="member", object="role:employee"
-        ),
-        TupleKey(user="user:bob@example.com", relation="member", object="role:manager"),
-        TupleKey(
-            user="role:employee",
-            relation="can_read",
-            object="document:doc_holiday_memo",
-        ),
-        TupleKey(
-            user="role:manager", relation="can_read", object="document:doc_holiday_memo"
-        ),
-        TupleKey(
-            user="role:manager", relation="can_read", object="document:doc_salary_q4"
-        ),
+        {
+            "user": "user:alice@example.com",
+            "relation": "member",
+            "object": "role:employee",
+        },
+        {
+            "user": "user:bob@example.com",
+            "relation": "member",
+            "object": "role:manager",
+        },
+        {
+            "user": "role:employee",
+            "relation": "can_read",
+            "object": "document:doc_holiday_memo",
+        },
+        {
+            "user": "role:manager",
+            "relation": "can_read",
+            "object": "document:doc_holiday_memo",
+        },
+        {
+            "user": "role:manager",
+            "relation": "can_read",
+            "object": "document:doc_salary_q4",
+        },
     ]
 
     tuples_to_delete = tuples_to_write
@@ -213,7 +239,10 @@ def ask():
 
         try:
             # 4. Ask Auth0 FGA: "Is this user allowed?"
-            #    Using the correct SDK CheckRequest model
+            if not _HAS_OPENFGA_MODELS or not ClientCheckRequest:
+                print("FGA model classes not available; cannot perform check")
+                return "Authorization backend not available.", 500
+
             check_request = ClientCheckRequest(
                 user=user_id, relation="can_read", object=object_id
             )
