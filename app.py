@@ -6,8 +6,9 @@ from flask import Flask, redirect, session, url_for, request, jsonify
 
 # --- This is the CORRECT FGA SDK ---
 from openfga_sdk import OpenFgaClient
+from openfga_sdk.credentials import ClientCredentials  # <-- FIX 1: ADD THIS IMPORT
 
-# Import models safely — some SDK versions may expose different symbols
+# Import models safely
 try:
     from openfga_sdk.client.models import ClientWriteRequest, ClientCheckRequest
 
@@ -21,17 +22,11 @@ except Exception as _e:
 # --- 1. INITIAL SETUP & CONFIG ---
 
 load_dotenv()
-
-print("--- DEBUGGING FGA ENV VARS ---")
-print(f"FGA_CLIENT_ID is set: {bool(os.environ.get('FGA_CLIENT_ID'))}")
-print(f"FGA_CLIENT_SECRET is set: {bool(os.environ.get('FGA_CLIENT_SECRET'))}")
-print(f"FGA_STORE_ID is set: {bool(os.environ.get('FGA_STORE_ID'))}")
-print("---------------------------------")
-
+# --- REMOVED DEBUG PRINTS ---
 app = Flask(__name__)
 app.secret_key = os.environ.get("APP_SECRET_KEY") or os.urandom(24)
 
-# Load documents safely (don't crash at import-time if the file is missing)
+# Load documents safely
 DOCUMENTS_DB = {}
 if os.path.exists("documents.json"):
     try:
@@ -63,8 +58,7 @@ auth0 = oauth.register(
 
 # --- 3. AUTH0 FGA (AUTHORIZATION) CLIENT (Correct Initialization) ---
 
-# Get region from your Auth0 domain (e.g., 'us', 'eu', 'au')
-# This assumes a domain like 'dev-xyz.us.auth0.com'
+# Get region from your Auth0 domain
 region = auth0_domain.split(".")[-3] if "auth0.com" in auth0_domain else "us"
 
 fga_client = None
@@ -72,70 +66,26 @@ try:
     fga_client_id = os.environ.get("FGA_CLIENT_ID")
     fga_client_secret = os.environ.get("FGA_CLIENT_SECRET")
     fga_store_id = os.environ.get("FGA_STORE_ID")
-    # Debug output for deploy logs
-    print("--- DEBUGGING FGA ENV VARS ---")
-    print("FGA_CLIENT_ID is set:", bool(fga_client_id))
-    print("FGA_CLIENT_SECRET is set:", bool(fga_client_secret))
-    print("FGA_STORE_ID is set:", bool(fga_store_id))
-    print("---------------------------------")
 
     if fga_client_id and fga_client_secret and fga_store_id:
-        # Try to adapt to different OpenFGA SDK constructor signatures
-        try:
-            import inspect
+        # --- FIX 2: THIS BLOCK IS REPLACED ---
+        # 1. Create the credentials object first
+        creds = ClientCredentials(
+            client_id=fga_client_id,
+            client_secret=fga_client_secret,
+            api_token_issuer=f"https://{auth0_domain}",
+            api_audience="https://api.fga.auth0.com/",
+        )
 
-            sig = inspect.signature(OpenFgaClient.__init__)
-            params = sig.parameters
+        # 2. Pass the single 'credentials' object
+        fga_client = OpenFgaClient(
+            credentials=creds,
+            api_url=f"https://api.{region}.fga.auth0.com",
+            store_id=fga_store_id,
+        )
+        # --- END OF FIX ---
 
-            # Candidate mapping of common parameter names -> values
-            candidate_kwargs = {
-                "client_id": fga_client_id,
-                "client_secret": fga_client_secret,
-                "store_id": fga_store_id,
-                "api_url": f"https://api.{region}.fga.auth0.com",
-                "api_token_issuer": f"https://{auth0_domain}",
-                "api_audience": "https://api.fga.auth0.com/",
-                # alternatives
-                "api_token": fga_client_secret,
-                "token": fga_client_secret,
-                "api_key": fga_client_secret,
-                "clientId": fga_client_id,
-                "clientSecret": fga_client_secret,
-                "storeId": fga_store_id,
-                "url": f"https://api.{region}.fga.auth0.com",
-            }
-
-            kwargs = {}
-            for name, val in candidate_kwargs.items():
-                if val is None:
-                    continue
-                if name in params:
-                    kwargs[name] = val
-
-            # If we couldn't map any known names, fall back to a minimal attempt
-            if not kwargs:
-                # prefer api_url + api_token-like arg
-                for token_name in ("api_token", "token", "api_key"):
-                    if token_name in params:
-                        kwargs = {
-                            token_name: fga_client_secret,
-                            "api_url": f"https://api.{region}.fga.auth0.com",
-                        }
-                        break
-
-            # Final attempt: instantiate with whatever kwargs we collected
-            fga_client = OpenFgaClient(**kwargs)
-            print(
-                "Official OpenFGA SDK Client Initialized. Used kwargs:",
-                list(kwargs.keys()),
-            )
-
-        except TypeError as te:
-            fga_client = None
-            print("Failed to initialize OpenFGA client:", te)
-        except Exception as e:
-            fga_client = None
-            print("Failed to initialize OpenFGA client:", e)
+        print("Official OpenFGA SDK Client Initialized.")
     else:
         print(
             "FGA environment variables not fully configured — skipping FGA client initialization."
@@ -145,7 +95,7 @@ except Exception as e:
     print(f"Failed to initialize OpenFGA client: {e}")
 
 
-# --- 4. SEEDING SCRIPT (Using the correct SDK models) ---
+# --- 4. SEEDING SCRIPT (Using plain dicts) ---
 def setup_fga_rules():
     if not fga_client:
         print("Skipping FGA rules setup: fga_client not configured")
@@ -158,7 +108,7 @@ def setup_fga_rules():
 
     print("Setting up FGA rules (Tuples)...")
 
-    # Some SDK versions don't export TupleKey; use plain dicts instead
+    # Use plain dicts
     tuples_to_write = [
         {
             "user": "user:alice@example.com",
@@ -186,25 +136,21 @@ def setup_fga_rules():
             "object": "document:doc_salary_q4",
         },
     ]
-
     tuples_to_delete = tuples_to_write
 
     try:
-        # Clear old tuples
         fga_client.write(ClientWriteRequest(deletes=tuples_to_delete))
         print("Old FGA tuples cleared.")
     except Exception as e:
         print(f"Error clearing old FGA Tuples (this is OK on first run): {e}")
 
     try:
-        # Write new tuples
         fga_client.write(ClientWriteRequest(writes=tuples_to_write))
         print("FGA Tuples written successfully.")
     except Exception as e:
         print(f"Error writing FGA Tuples: {e}")
 
 
-# Run seeding only when we have a configured client
 if fga_client:
     try:
         setup_fga_rules()
@@ -241,12 +187,10 @@ def login():
 def callback():
     token = auth0.authorize_access_token()
     userinfo = {}
-    # Try to fetch userinfo from the userinfo endpoint first (recommended)
     try:
         resp = auth0.get("userinfo")
         userinfo = resp.json()
     except Exception:
-        # Fallback: some providers include userinfo in the token response
         userinfo = token.get("userinfo") or token.get("id_token_claims") or {}
 
     session["user"] = userinfo
@@ -263,7 +207,7 @@ def logout():
     )
 
 
-# --- 6. THE SECURE RAG ENDPOINT (Using the correct SDK) ---
+# --- 6. THE SECURE RAG ENDPOINT ---
 
 
 @app.route("/ask")
@@ -281,7 +225,6 @@ def ask():
     if not found_docs:
         return "I'm sorry, I couldn't find any documents related to your query."
 
-    # Ensure FGA client is available
     if not fga_client:
         print("FGA client not configured; denying request")
         return "Authorization backend not configured.", 500
@@ -298,7 +241,6 @@ def ask():
         print(f"Checking permission: Can '{user_id}' 'can_read' '{object_id}'?")
 
         try:
-            # 4. Ask Auth0 FGA: "Is this user allowed?"
             if not _HAS_OPENFGA_MODELS or not ClientCheckRequest:
                 print("FGA model classes not available; cannot perform check")
                 return "Authorization backend not available.", 500
