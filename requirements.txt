@@ -4,4 +4,4 @@ gunicorn
 flask-cors
 authlib
 python-dotenv
-auth0-fga
+openfga_sdk
