@@ -72,17 +72,70 @@ try:
     fga_client_id = os.environ.get("FGA_CLIENT_ID")
     fga_client_secret = os.environ.get("FGA_CLIENT_SECRET")
     fga_store_id = os.environ.get("FGA_STORE_ID")
+    # Debug output for deploy logs
+    print("--- DEBUGGING FGA ENV VARS ---")
+    print("FGA_CLIENT_ID is set:", bool(fga_client_id))
+    print("FGA_CLIENT_SECRET is set:", bool(fga_client_secret))
+    print("FGA_STORE_ID is set:", bool(fga_store_id))
+    print("---------------------------------")
 
     if fga_client_id and fga_client_secret and fga_store_id:
-        fga_client = OpenFgaClient(
-            client_id=fga_client_id,
-            client_secret=fga_client_secret,
-            api_url=f"https://api.{region}.fga.auth0.com",
-            store_id=fga_store_id,
-            api_token_issuer=f"https://{auth0_domain}",
-            api_audience="https://api.fga.auth0.com/",
-        )
-        print("Official OpenFGA SDK Client Initialized.")
+        # Try to adapt to different OpenFGA SDK constructor signatures
+        try:
+            import inspect
+
+            sig = inspect.signature(OpenFgaClient.__init__)
+            params = sig.parameters
+
+            # Candidate mapping of common parameter names -> values
+            candidate_kwargs = {
+                "client_id": fga_client_id,
+                "client_secret": fga_client_secret,
+                "store_id": fga_store_id,
+                "api_url": f"https://api.{region}.fga.auth0.com",
+                "api_token_issuer": f"https://{auth0_domain}",
+                "api_audience": "https://api.fga.auth0.com/",
+                # alternatives
+                "api_token": fga_client_secret,
+                "token": fga_client_secret,
+                "api_key": fga_client_secret,
+                "clientId": fga_client_id,
+                "clientSecret": fga_client_secret,
+                "storeId": fga_store_id,
+                "url": f"https://api.{region}.fga.auth0.com",
+            }
+
+            kwargs = {}
+            for name, val in candidate_kwargs.items():
+                if val is None:
+                    continue
+                if name in params:
+                    kwargs[name] = val
+
+            # If we couldn't map any known names, fall back to a minimal attempt
+            if not kwargs:
+                # prefer api_url + api_token-like arg
+                for token_name in ("api_token", "token", "api_key"):
+                    if token_name in params:
+                        kwargs = {
+                            token_name: fga_client_secret,
+                            "api_url": f"https://api.{region}.fga.auth0.com",
+                        }
+                        break
+
+            # Final attempt: instantiate with whatever kwargs we collected
+            fga_client = OpenFgaClient(**kwargs)
+            print(
+                "Official OpenFGA SDK Client Initialized. Used kwargs:",
+                list(kwargs.keys()),
+            )
+
+        except TypeError as te:
+            fga_client = None
+            print("Failed to initialize OpenFGA client:", te)
+        except Exception as e:
+            fga_client = None
+            print("Failed to initialize OpenFGA client:", e)
     else:
         print(
             "FGA environment variables not fully configured — skipping FGA client initialization."
