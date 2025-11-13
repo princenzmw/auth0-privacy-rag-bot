@@ -1,15 +1,13 @@
 import json
 import os
+import requests  # <-- FIX 1: ADD THIS IMPORT
 from dotenv import load_dotenv
 from authlib.integrations.flask_client import OAuth
 from flask import Flask, redirect, session, url_for, request, jsonify
 
 # --- This is the CORRECT FGA SDK ---
 from openfga_sdk import OpenFgaClient, ClientConfiguration
-from openfga_sdk.credentials import (
-    Credentials,
-    CredentialConfiguration,
-)  # <-- FIX 1: CORRECT IMPORTS
+from openfga_sdk.credentials import Credentials, CredentialConfiguration
 
 # Import models safely
 try:
@@ -64,13 +62,14 @@ auth0 = oauth.register(
 region = auth0_domain.split(".")[-3] if "auth0.com" in auth0_domain else "us"
 
 fga_client = None
+sync_session = requests.Session()  # <-- FIX 2: CREATE A SYNC SESSION
+
 try:
     fga_client_id = os.environ.get("FGA_CLIENT_ID")
     fga_client_secret = os.environ.get("FGA_CLIENT_SECRET")
     fga_store_id = os.environ.get("FGA_STORE_ID")
 
     if fga_client_id and fga_client_secret and fga_store_id:
-        # --- FIX 2: THIS BLOCK IS REBUILT BASED ON DOCS ---
         # 1. Create the credentials configuration
         creds_config = CredentialConfiguration(
             api_issuer=f"https://{auth0_domain}",
@@ -80,7 +79,11 @@ try:
         )
 
         # 2. Create the credentials object
-        creds = Credentials(method="client_credentials", configuration=creds_config)
+        creds = Credentials(
+            method="client_credentials",
+            configuration=creds_config,
+            sync_http_client=sync_session,  # <-- FIX 3: PASS THE SYNC SESSION
+        )
 
         # 3. Create the main client configuration
         client_config = ClientConfiguration(
@@ -91,9 +94,8 @@ try:
 
         # 4. Initialize the client with the single config object
         fga_client = OpenFgaClient(client_config)
-        # --- END OF FIX ---
 
-        print("Official OpenFGA SDK Client Initialized.")
+        print("Official OpenFGA SDK Client Initialized (SYNC MODE).")  # Updated print
     else:
         print(
             "FGA environment variables not fully configured — skipping FGA client initialization."
