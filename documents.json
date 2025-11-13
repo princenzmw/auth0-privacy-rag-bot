@@ -1,0 +1,10 @@
+{
+  "doc_salary_q4": {
+    "content": "The Q4 salary budget is $500,000.",
+    "question_match": "q4 salary budget"
+  },
+  "doc_holiday_memo": {
+    "content": "The company holiday party is on December 20th.",
+    "question_match": "holiday party"
+  }
+}
