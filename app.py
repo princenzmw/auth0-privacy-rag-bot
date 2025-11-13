@@ -6,24 +6,30 @@ from flask import Flask, redirect, session, url_for, request, jsonify
 
 # --- This is the CORRECT FGA SDK ---
 from openfga_sdk import OpenFgaClient
-from openfga_sdk.client.models import (
-    ClientWriteRequest,
-    ClientCheckRequest,
-    ClientTupleKey,
-)
+from openfga_sdk.client.models import ClientWriteRequest, ClientCheckRequest, TupleKey
 
 # --- 1. INITIAL SETUP & CONFIG ---
 
 load_dotenv()
 app = Flask(__name__)
-app.secret_key = os.environ.get("APP_SECRET_KEY")
+app.secret_key = os.environ.get("APP_SECRET_KEY") or os.urandom(24)
 
-with open("documents.json", "r") as f:
-    DOCUMENTS_DB = json.load(f)
+# Load documents safely (don't crash at import-time if the file is missing)
+DOCUMENTS_DB = {}
+if os.path.exists("documents.json"):
+    try:
+        with open("documents.json", "r") as f:
+            DOCUMENTS_DB = json.load(f)
+    except Exception as e:
+        print(f"Warning: failed to load documents.json: {e}")
+else:
+    print("Warning: documents.json not found — DOCUMENTS_DB is empty")
 
 # --- 2. AUTH0 (LOGIN) CLIENT ---
 
 raw_domain = os.environ.get("AUTH0_DOMAIN")
+if not raw_domain:
+    raise RuntimeError("AUTH0_DOMAIN environment variable is required")
 auth0_domain = raw_domain.replace("https://", "").replace("http://", "").rstrip("/")
 
 oauth = OAuth(app)
@@ -44,38 +50,53 @@ auth0 = oauth.register(
 # This assumes a domain like 'dev-xyz.us.auth0.com'
 region = auth0_domain.split(".")[-3] if "auth0.com" in auth0_domain else "us"
 
-fga_client = OpenFgaClient(
-    client_id=os.environ.get("FGA_CLIENT_ID"),
-    client_secret=os.environ.get("FGA_CLIENT_SECRET"),
-    api_url=f"https://api.{region}.fga.auth0.com",  # e.g., https://api.us.fga.auth0.com
-    store_id=os.environ.get("FGA_STORE_ID"),
-    api_token_issuer=f"https://{auth0_domain}",
-    api_audience="https://api.fga.auth0.com/",
-)
-print("Official OpenFGA SDK Client Initialized.")
+fga_client = None
+try:
+    fga_client_id = os.environ.get("FGA_CLIENT_ID")
+    fga_client_secret = os.environ.get("FGA_CLIENT_SECRET")
+    fga_store_id = os.environ.get("FGA_STORE_ID")
+
+    if fga_client_id and fga_client_secret and fga_store_id:
+        fga_client = OpenFgaClient(
+            client_id=fga_client_id,
+            client_secret=fga_client_secret,
+            api_url=f"https://api.{region}.fga.auth0.com",
+            store_id=fga_store_id,
+            api_token_issuer=f"https://{auth0_domain}",
+            api_audience="https://api.fga.auth0.com/",
+        )
+        print("Official OpenFGA SDK Client Initialized.")
+    else:
+        print(
+            "FGA environment variables not fully configured — skipping FGA client initialization."
+        )
+except Exception as e:
+    fga_client = None
+    print(f"Failed to initialize OpenFGA client: {e}")
 
 
 # --- 4. SEEDING SCRIPT (Using the correct SDK models) ---
 def setup_fga_rules():
+    if not fga_client:
+        print("Skipping FGA rules setup: fga_client not configured")
+        return
+
     print("Setting up FGA rules (Tuples)...")
 
-    # Note: The SDK model for tuples is slightly different
     tuples_to_write = [
-        ClientTupleKey(
+        TupleKey(
             user="user:alice@example.com", relation="member", object="role:employee"
         ),
-        ClientTupleKey(
-            user="user:bob@example.com", relation="member", object="role:manager"
-        ),
-        ClientTupleKey(
+        TupleKey(user="user:bob@example.com", relation="member", object="role:manager"),
+        TupleKey(
             user="role:employee",
             relation="can_read",
             object="document:doc_holiday_memo",
         ),
-        ClientTupleKey(
+        TupleKey(
             user="role:manager", relation="can_read", object="document:doc_holiday_memo"
         ),
-        ClientTupleKey(
+        TupleKey(
             user="role:manager", relation="can_read", object="document:doc_salary_q4"
         ),
     ]
@@ -97,7 +118,12 @@ def setup_fga_rules():
         print(f"Error writing FGA Tuples: {e}")
 
 
-setup_fga_rules()
+# Run seeding only when we have a configured client
+if fga_client:
+    try:
+        setup_fga_rules()
+    except Exception as e:
+        print(f"Warning: setup_fga_rules failed: {e}")
 
 
 # --- 5. STANDARD LOGIN ROUTES ---
@@ -106,8 +132,12 @@ setup_fga_rules()
 @app.route("/")
 def home():
     if "user" in session:
+        user = session["user"]
+        display_name = (
+            user.get("name") or user.get("nickname") or user.get("email") or "User"
+        )
         return f"""
-        Hello, {session["user"]["name"]}! <a href="/logout">Logout</a><br><br>
+        Hello, {display_name}! <a href="/logout">Logout</a><br><br>
         <form action="/ask" method="get">
             <input type="text" name="query" placeholder="Ask about 'holiday party' or 'q4 salary budget'" size="50"/>
             <input type="submit" value="Ask"/>
@@ -124,7 +154,16 @@ def login():
 @app.route("/callback")
 def callback():
     token = auth0.authorize_access_token()
-    session["user"] = token["userinfo"]
+    userinfo = {}
+    # Try to fetch userinfo from the userinfo endpoint first (recommended)
+    try:
+        resp = auth0.get("userinfo")
+        userinfo = resp.json()
+    except Exception:
+        # Fallback: some providers include userinfo in the token response
+        userinfo = token.get("userinfo") or token.get("id_token_claims") or {}
+
+    session["user"] = userinfo
     return redirect("/")
 
 
@@ -156,7 +195,16 @@ def ask():
     if not found_docs:
         return "I'm sorry, I couldn't find any documents related to your query."
 
-    user_id = f"user:{session['user']['email']}"
+    # Ensure FGA client is available
+    if not fga_client:
+        print("FGA client not configured; denying request")
+        return "Authorization backend not configured.", 500
+
+    user_email = session["user"].get("email") or session["user"].get("sub")
+    if not user_email:
+        return "Authenticated user has no email or identifier.", 400
+
+    user_id = f"user:{user_email}"
     final_context = []
 
     for doc_id, doc_content in found_docs:
